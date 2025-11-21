@@ -1,20 +1,13 @@
 import json
 import sys
 import textwrap
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import requests
 
 BASE_URL = "https://api-seller.ozon.ru/"
-SPEC_SOURCES = [
-    # Public OpenAPI specifications that are usually exposed by OZON.
-    "https://api-seller.ozon.ru/public/open-api/1.0/swagger.json",
-    "https://api-seller.ozon.ru/public/api/seller/v1/swagger.json",
-    "https://docs.ozon.ru/public/api/seller/swagger.json",
-]
 
-# Minimal fallback to keep the console useful even when the spec cannot be downloaded.
-FALLBACK_COMMANDS = {
+COMMANDS = {
     "v1/analytics/stocks": {
         "method": "post",
         "summary": "Получить аналитику по остаткам",
@@ -50,56 +43,32 @@ FALLBACK_COMMANDS = {
             },
             "required": [],
         },
-    }
+    },
+    "v3/supply-order/get": {
+        "method": "post",
+        "summary": "Получить информацию о заявках на поставку",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "order_ids": {"type": "array", "items": {"type": "integer"}},
+            },
+            "required": ["order_ids"],
+        },
+    },
+    "v3/supply-order/list": {
+        "method": "post",
+        "summary": "Список заявок на поставку",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "default": 100},
+                "offset": {"type": "integer", "default": 0},
+                "status": {"type": "string"},
+            },
+            "required": [],
+        },
+    },
 }
-
-
-def fetch_openapi_spec() -> Tuple[Optional[Dict[str, Any]], List[str]]:
-    errors: List[str] = []
-    for source in SPEC_SOURCES:
-        try:
-            response = requests.get(source, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            if data:
-                return data, errors
-        except Exception as exc:  # pragma: no cover - robustness
-            errors.append(f"Не удалось скачать {source}: {exc}")
-    return None, errors
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
-
-def resolve_reference(schema: Dict[str, Any], components: Dict[str, Any]) -> Dict[str, Any]:
-    if "$ref" not in schema:
-        return schema
-    ref_path = schema["$ref"].split("/")
-    target = components
-    for part in ref_path[1:]:
-        target = target.get(part, {})
-    return target or schema
-
-
-def build_commands_from_spec(spec: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    commands: Dict[str, Dict[str, Any]] = {}
-    components = spec.get("components", {})
-    paths = spec.get("paths", {})
-    for path, methods in paths.items():
-        for method_name, meta in methods.items():
-            schema = (
-                meta.get("requestBody", {})
-                .get("content", {})
-                .get("application/json", {})
-                .get("schema")
-            )
-            if schema:
-                schema = resolve_reference(schema, components)
-            command_name = path.lstrip("/")
-            commands[command_name] = {
-                "method": method_name,
-                "summary": meta.get("summary") or meta.get("description") or command_name,
-                "schema": schema,
-            }
-    return commands
 
 
 def prompt_for_value(name: str, schema: Dict[str, Any]) -> Any:
@@ -142,20 +111,20 @@ def prompt_for_object(schema: Dict[str, Any]) -> Dict[str, Any]:
     properties = schema.get("properties", {})
     required = set(schema.get("required", []))
     for prop, prop_schema in properties.items():
-        resolved_schema = resolve_reference(prop_schema, {})
         is_required = prop in required
         title = prop_schema.get("description") or prop
         if not is_required:
             choice = input(f"Заполнить необязательное поле '{title}'? [y/N]: ").strip().lower()
             if choice not in {"y", "yes", "д", "да"}:
                 continue
-        result[prop] = prompt_for_value(title, resolved_schema)
+        result[prop] = prompt_for_value(title, prop_schema)
     return result
 
 
 def prompt_for_payload(schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not schema:
-        return {}
+        raw = input("Введите тело запроса в формате JSON (или оставьте пустым): ")
+        return json.loads(raw) if raw else {}
     if schema.get("type") == "object":
         print("Заполните поля запроса (оставьте пустым, если не хотите заполнять необязательные поля):")
         return prompt_for_object(schema)
@@ -236,8 +205,8 @@ def main() -> None:
             ==============================
             Добро пожаловать в OZON API CLI
             ==============================
-            Эта консоль загружает описание методов из официальной документации OZON и
-            позволяет запускать запросы с подсказками по вводу.
+            Эта консоль содержит основные методы OZON API и позволяет запускать
+            запросы с подсказками по вводу.
             """
         )
     )
@@ -252,15 +221,7 @@ def main() -> None:
         print("Не удалось подтвердить ключ. Проверьте данные и попробуйте снова.")
         sys.exit(1)
     print("Ключ подтверждён. Загружаем список методов...")
-
-    spec, errors = fetch_openapi_spec()
-    if spec:
-        commands = build_commands_from_spec(spec)
-    else:
-        for err in errors:
-            print(f"  {err}")
-        print("Используем встроенный список методов.")
-        commands = FALLBACK_COMMANDS
+    commands = COMMANDS
 
     if not commands:
         print("Не удалось собрать список команд. Завершение работы.")
