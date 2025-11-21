@@ -1,6 +1,7 @@
 import json
 import sys
 import textwrap
+from email.policy import default
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -56,10 +57,43 @@ FALLBACK_COMMANDS = {
         },
     },
     "v3/supply-order/list": {
-        "method": "post",
-        "summary": "Получить список заявок на поставку",
-        "schema": {"type": "object", "properties": {}},
-    },
+    "method": "post",
+    "summary": "ID заявок",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "filter": {
+                "type": "object",
+                "properties": {
+                    "states": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1
+                    }
+                },
+                "required": ["states"]
+            },
+            "last_id": {
+                "type": ["string", "null"],
+                "default": None
+            },
+            "limit": {
+                "type": "integer",
+                "default": 100
+            },
+            "sort_by": {
+                "type": "string",
+                "default": "ORDER_STATE_UPDATED_AT"
+            },
+            "sort_dir": {
+                "type": "string",
+                "enum": ["ASC", "DESC"],
+                "default": "DESC"
+            }
+        },
+        "required": ["filter"]
+    }
+}
 }
 
 
