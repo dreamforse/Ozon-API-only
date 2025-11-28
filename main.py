@@ -1,19 +1,13 @@
 import json
 import sys
 import textwrap
-from typing import Any, Dict, List, Optional, Tuple
+from email.policy import default
+from typing import Any, Dict, List, Optional
 
 import requests
 
 BASE_URL = "https://api-seller.ozon.ru/"
-SPEC_SOURCES = [
-    # Public OpenAPI specifications that are usually exposed by OZON.
-    "https://api-seller.ozon.ru/public/open-api/1.0/swagger.json",
-    "https://api-seller.ozon.ru/public/api/seller/v1/swagger.json",
-    "https://docs.ozon.ru/public/api/seller/swagger.json",
-]
 
-# Minimal fallback to keep the console useful even when the spec cannot be downloaded.
 FALLBACK_COMMANDS = {
     "v1/analytics/stocks": {
         "method": "post",
@@ -50,56 +44,57 @@ FALLBACK_COMMANDS = {
             },
             "required": [],
         },
+    },
+    "v3/supply-order/get": {
+        "method": "post",
+        "summary": "Получить заявки на поставку по ID",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "order_ids": {"type": "array", "items": {"type": "integer"}},
+            },
+            "required": ["order_ids"],
+        },
+    },
+    "v3/supply-order/list": {
+    "method": "post",
+    "summary": "ID заявок",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "filter": {
+                "type": "object",
+                "properties": {
+                    "states": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1
+                    }
+                },
+                "required": ["states"]
+            },
+            "last_id": {
+                "type": ["string", "null"],
+                "default": None
+            },
+            "limit": {
+                "type": "integer",
+                "default": 100
+            },
+            "sort_by": {
+                "type": "string",
+                "default": "ORDER_STATE_UPDATED_AT"
+            },
+            "sort_dir": {
+                "type": "string",
+                "enum": ["ASC", "DESC"],
+                "default": "DESC"
+            }
+        },
+        "required": ["filter"]
     }
 }
-
-
-def fetch_openapi_spec() -> Tuple[Optional[Dict[str, Any]], List[str]]:
-    errors: List[str] = []
-    for source in SPEC_SOURCES:
-        try:
-            response = requests.get(source, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            if data:
-                return data, errors
-        except Exception as exc:  # pragma: no cover - robustness
-            errors.append(f"Не удалось скачать {source}: {exc}")
-    return None, errors
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
-
-def resolve_reference(schema: Dict[str, Any], components: Dict[str, Any]) -> Dict[str, Any]:
-    if "$ref" not in schema:
-        return schema
-    ref_path = schema["$ref"].split("/")
-    target = components
-    for part in ref_path[1:]:
-        target = target.get(part, {})
-    return target or schema
-
-
-def build_commands_from_spec(spec: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    commands: Dict[str, Dict[str, Any]] = {}
-    components = spec.get("components", {})
-    paths = spec.get("paths", {})
-    for path, methods in paths.items():
-        for method_name, meta in methods.items():
-            schema = (
-                meta.get("requestBody", {})
-                .get("content", {})
-                .get("application/json", {})
-                .get("schema")
-            )
-            if schema:
-                schema = resolve_reference(schema, components)
-            command_name = path.lstrip("/")
-            commands[command_name] = {
-                "method": method_name,
-                "summary": meta.get("summary") or meta.get("description") or command_name,
-                "schema": schema,
-            }
-    return commands
+}
 
 
 def prompt_for_value(name: str, schema: Dict[str, Any]) -> Any:
@@ -142,14 +137,13 @@ def prompt_for_object(schema: Dict[str, Any]) -> Dict[str, Any]:
     properties = schema.get("properties", {})
     required = set(schema.get("required", []))
     for prop, prop_schema in properties.items():
-        resolved_schema = resolve_reference(prop_schema, {})
         is_required = prop in required
         title = prop_schema.get("description") or prop
         if not is_required:
             choice = input(f"Заполнить необязательное поле '{title}'? [y/N]: ").strip().lower()
             if choice not in {"y", "yes", "д", "да"}:
                 continue
-        result[prop] = prompt_for_value(title, resolved_schema)
+        result[prop] = prompt_for_value(title, prop_schema)
     return result
 
 
@@ -236,7 +230,7 @@ def main() -> None:
             ==============================
             Добро пожаловать в OZON API CLI
             ==============================
-            Эта консоль загружает описание методов из официальной документации OZON и
+            Эта консоль содержит минимальный набор методов OZON и
             позволяет запускать запросы с подсказками по вводу.
             """
         )
@@ -252,15 +246,7 @@ def main() -> None:
         print("Не удалось подтвердить ключ. Проверьте данные и попробуйте снова.")
         sys.exit(1)
     print("Ключ подтверждён. Загружаем список методов...")
-
-    spec, errors = fetch_openapi_spec()
-    if spec:
-        commands = build_commands_from_spec(spec)
-    else:
-        for err in errors:
-            print(f"  {err}")
-        print("Используем встроенный список методов.")
-        commands = FALLBACK_COMMANDS
+    commands = FALLBACK_COMMANDS
 
     if not commands:
         print("Не удалось собрать список команд. Завершение работы.")
